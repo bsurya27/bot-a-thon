@@ -60,9 +60,12 @@ config = AgentConfig(
 
 agent = ZyndAIAgent(config)
 
-@agent.on_message
-async def handle_message(message):
-    data = message.parts[0].content if message.parts else {}
+def handle_message(content: str) -> str:
+    try:
+        data = json.loads(content)
+    except:
+        data = {}
+    
     agent_id = data.get("agent_id", "")
     input_text = data.get("input", "")
     output_text = data.get("output", "")
@@ -79,12 +82,14 @@ async def handle_message(message):
     final_score = compute_final_score(breakdown)
     verdict = get_verdict(final_score)
 
-    return {
+    return json.dumps({
         "agent_id": agent_id,
         "score": final_score,
         "verdict": verdict,
         "breakdown": breakdown
-    }
+    })
+
+agent.set_custom_agent(handle_message)
 
 if __name__ == "__main__":
     agent.start()

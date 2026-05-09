@@ -1,15 +1,14 @@
 import os
 import json
 import requests
-from flask import Flask, request, jsonify
 from anthropic import Anthropic
 from scorer import compute_breakdown, compute_final_score, get_verdict
 from checklists import CHECKLISTS
 from dotenv import load_dotenv
+from zyndai_agent.agent import AgentConfig, ZyndAIAgent
 
 load_dotenv()
 
-app = Flask(__name__)
 client = Anthropic()
 
 def fetch_agent_card(agent_id: str) -> dict:
@@ -22,11 +21,11 @@ def fetch_agent_card(agent_id: str) -> dict:
         pass
     return {}
 
-def run_checklist(dimension: str, questions: list, agent_desc: str, input_text: str, output_text: str) -> list[str]:
+def run_checklist(dimension: str, questions: list, agent_desc: str, input_text: str, output_text: str) -> list:
     questions_formatted = "\n".join([f"{i+1}. {q} (Yes/No)" for i, q in enumerate(questions)])
     
     message = client.messages.create(
-        model="claude-opus-4-5",
+        model="claude-sonnet-4-20250514",
         max_tokens=256,
         system="""You are a strict evaluator. 
 Answer each question with ONLY 'Yes' or 'No'. 
@@ -47,48 +46,48 @@ Answer each question with Yes or No only:
     answers = message.content[0].text.strip().split("\n")
     return [a.strip() for a in answers if a.strip()]
 
-@app.route("/eval", methods=["POST"])
-def evaluate():
-    data = request.json
-    
+config = AgentConfig(
+    name="AgentEval",
+    description="Evaluates AI agent output quality using deterministic binary checklists. Scores coherence, completeness, conciseness and format.",
+    category="tooling",
+    tags=["eval", "quality", "scoring", "agents", "llm"],
+    entity_url="https://variably-scared-oaf.ngrok-free.dev",
+    server_host="0.0.0.0",
+    server_port=5000,
+    registry_url="https://zns01.zynd.ai",
+    price="0.001",
+)
+
+agent = ZyndAIAgent(config)
+
+@agent.on_message
+async def handle_message(message):
+    data = message.parts[0].content if message.parts else {}
     agent_id = data.get("agent_id", "")
     input_text = data.get("input", "")
     output_text = data.get("output", "")
-    start_time = data.get("start_time")
-    end_time = data.get("end_time")
 
-    # fetch agent card
     card = fetch_agent_card(agent_id)
     agent_desc = card.get("description", "A general purpose AI agent")
 
-    # run checklists
     dimension_answers = {}
     for dimension, questions in CHECKLISTS.items():
         answers = run_checklist(dimension, questions, agent_desc, input_text, output_text)
         dimension_answers[dimension] = answers
 
-    # compute scores
     breakdown = compute_breakdown(dimension_answers)
-
-    # response time score if provided
-    if start_time and end_time:
-        elapsed = end_time - start_time
-        breakdown["response_time"] = round(max(0, 10 - elapsed), 2)
-
     final_score = compute_final_score(breakdown)
     verdict = get_verdict(final_score)
 
-    return jsonify({
+    return {
         "agent_id": agent_id,
         "score": final_score,
         "verdict": verdict,
-        "breakdown": breakdown,
-        "agent_description": agent_desc
-    })
-
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok"})
+        "breakdown": breakdown
+    }
 
 if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+    agent.start()
+    import time
+    while True:
+        time.sleep(1)
